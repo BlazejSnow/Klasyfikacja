@@ -1,0 +1,409 @@
+---
+title: "ProjketPS"
+author: "Błażej Śnieg"
+date: "2024-02-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readxl)#dane
+library(moments)#np.skośność
+library(devtools)#do githuba
+devtools::install_github("jenzopr/silvermantest")
+library(silvermantest)#test silvermana
+library(outliers)#test Grubbs
+library(heatmaply)#heatmapy
+library(Rtsne)#Tsne
+library(plotly)#wykresiki
+library(cluster)#hierachiczne
+library(psych)#KMO i Barlett
+library(nFactors)#do wykresu z eigen
+library(rpart)#robienie drzewa
+library(rattle)#pokazanie go
+library(randomForest)#las lasowy
+library(caret)#do podziałów
+library(class)#KNN
+library(e1071)#naiveBayes
+library(mclust)#gmm
+
+
+
+najem <-as.data.frame(read_excel("Najem.xlsx"))
+
+```
+## Opis danych i cel projektu.
+Tabela z danymi dotyczy mieszkań na wynajem w Polsce(Warszawie, Łodzi, Krakowie, Wrocławiu, Poznaniu, Gdańsku, Szczecinie, Bydgoszczy, Lublinie, Katowicach, Białymstoku, Czestochowie). Tabela przedstawia aktualny stan ofert mieszkań dostępnych w internecie w lutym 2024 roku. Dane składają się z 16 kolumn i 4479 wierszy .   
+Poszczególne kolumny oraz opis:  
+Type - Typ budynku (tenement-kamienica, blockOfFlats- Blok mieszkalny, apartmentBuilding -apartamentowiec)  
+squareMeters-powierzchnia kwadratowa mieszkania  
+rooms-liczba pokoji w mieszkaniu  
+floor-Nr piętra na ktorym znajduje sie mieszkanie  
+floorCount-Całkowita ilość pięter w budynku w którym znajduje się mieszkanie  
+year since build- Wiek budowli  
+centreDistance-Dystans od mieszkania do centrum miasta podany w kilometrach  
+PoiCount-liczba (szkół, przychodni lekarski,przedszkól, placówek pocztowych, restauracji, Szół wyższych, aptek) w promieniu 500m od mieszkania  
+schoolDistance-dystans do najbliższej szkoły od mieszkania wyrażony w kilometrach  
+clinicDistance- dystans do najbliższej przychodni od mieszkania wyrażone w kilometrach  
+postOfficeDistance-dystans do najbliższej placcówki pocztowej wyrażony w kilometrach  
+kindergartenDistance- dystans do najbliższego przedszkola od mieszkania wyrażony w kilometrach  
+restaurantDistance- dystans do najbliższej restauracji od mieszkania wyrażony w kilometrach  
+collegeDistance- dystans do najbliżeszej szkoły wyższej od mieszkania wyrażony w kilometrach  
+pharmacyDistance- dystans do najbliższej apteki od mieszkania wyrażone w ilometrach
+price- Miesięczna cena wynajmu mieszkania w złotówkach.  
+Dene pochodzą z https://www.kaggle.com/datasets/krzysztofjamroz/apartment-prices-in-poland/data  
+Celem projektu jest klasyfiakcja bez nadzoru i pod nadzorem danych, na podstawie tabeli którą wyżej opisałem.
+Plan pracy:  
+
+1. Podstawowe parametru rozkładu
+2. Sprawdzenie pod kątem wielomdodalności
+3. Zbadanie obserwacji odstających
+4. Macierz korelacji
+5. PCA
+6. TSNA
+7. Analiza skupień za pomocą k-mean
+8. Analiza metoda lokcia, hierachiczne, podziałowe.
+9. Analiza czynnikowa
+10. klasyfiakcja z użyciem dzrewa decyzji
+11. Klasyfiakcja z użyicem lasów losowych
+12. Klasyfikacja z użyciem KNN
+13. Klasyfikacja z użyciem naiwnego klasyfiaktora Bayesa
+13. Klasyfikacja z użyicem GMM
+
+```{r head}
+head(najem)
+```
+## Podstawowe parametru rozkładu
+
+Sprawdze czy dane mają wartości puste i czy mają duplikaty.  
+```{r Podstawowe parametru rozkładu 1}
+any(is.na(najem))
+anyDuplicated(najem)
+class(najem)
+```
+Nie ma wartości pustych  
+dupliakty są ,nie usuwam ich.  
+Sprawdze ile danych mam dla poszczególnej klasy.  
+Wyświetle stastyski sumaryczne, odchylenie standordowe i skonsnosc  
+```{r Podstawowe parametru rozkładu 2}
+summary(as.factor(najem$type))
+print('sumaryczne')
+apply(najem[,-1],2,summary)
+print('Odchylenie standardowe')
+apply(najem[,-1],2,sd)
+print('Skośność')
+apply(najem[,-1],2,skewness)
+
+```
+Wartości nie są równomiernie rozłożone miedzy klasy, prawie połowa wartości jest klasy ApartamentBuilding.  
+Największą wariancje ,odchylenie standardowe, oraz średnią ma zmiena price.  
+Wszystkie wartości mają dodatnią skośność i wszystkie mają skośność z przedziału od 0,97 do 2,6
+Wyświetle histogramy  
+```{r Podstawowe parametru rozkładu 3}
+for (i in 1:15){
+  hist(najem[,i+1],main=colnames(najem)[i+1],xlab="")}
+
+```
+  
+Histogramy odzwierdziedlaja dodatnia skośność,  
+Żadnej zmienej nie podejrzewam o rozdkład normalny , o wielomodalnosc podejrzewam tylko zmiena year since build, ale skoro tu już jesteśmy to przetestuje wszystkie zmiene pod tymi względami:  
+
+## Test shapiro-wilka na rozkład normalny:
+```{r  Podstawowe parametru rozkładu4 }
+##shapiro ma wyjsc powyżej 5%
+##
+tablicawartosćip=list
+for (i in 1:15){
+  wynik.s.w<-shapiro.test(najem[,i+1])
+  tablicawartosćip<-c(tablicawartosćip,wynik.s.w$p.value)
+}
+print(tablicawartosćip)
+```
+  
+Według testu shapiro wilka(5%) żadna zmienna nie jest nawet blisko bycia rozkładem normalnym
+zrobie jeszcze test Kolomogroa-Smirnov na normalnośc.  
+Do tego zadbam o to aby zmiene były bezduplikatów(tego wymaga test/nie trzeba ale wyskakuje taki kolorowy komunikat,że można to zrobić)  
+
+## Test Kolomogroa-Smirnov
+```{r Podstawowe parametru rozkładu 5}
+tablicawartosćip2=0
+co33<-unique(najem)
+for (i in 1:15){
+wynik.k.s<-ks.test(co33[,i+1],pnorm)
+if(wynik.k.s$p.value>0){
+  tablicawartosćip2<-c(tablicawartosćip2,wynik.k.s$p.value)
+}
+}
+print(tablicawartosćip2)
+```
+  
+test również wyszedł negatywnie żadna zmiena nie przekroczyła 5%. 
+
+## Wniosek:  
+Zmiene nie mają rozkładu normlanego.  
+  
+  
+Teraz przetestujemy je testem Silvermana na wielomodalność  
+
+## Test Silvermana 
+
+```{r Sprawdzenie pod kątem wielomdodalności1}
+for (i in 1:15){
+  print(names(najem)[i+1])
+  print(silverman.test(najem[,i+1],k=1)) }
+
+```
+  
+p-value mniejsze niż 5% to znaczy ,że zmiena nie jest jednomodalna.  
+więc zmiene year since build,poiCount,schoolDistance,kindergartenDistance nie sa jednomodalne  
+to sprawdźmy ile mniej wiecej sa modalne z pomocą silvermanplot  
+```{r Sprawdzenie pod kątem wielomdodalności 2}
+silverman.plot(najem$`year since build`)
+silverman.plot(najem$poiCount)
+silverman.plot(najem$schoolDistance)
+silverman.plot(najem$kindergartenDistance)
+
+```
+ 
+ year since build - powyrzej czterech mod  
+ poiCount-najprawdopodobniej trzy/cztero modalna  
+ schoolDistance-najprawdopodbniej dwu modalna  
+ kindergartenDistance-najprawdopodbniej dwu modalna  
+Wykanym test na obserwacje odstające:  
+
+## Test Grubbs-a
+```{r Zbadanie obserwacji odstających}
+apply(najem[,-1],2,function(x)
+grubbs.test(x))
+```
+  
+Zmiene (squareMeters,rooms,collegeDistance) nie mają obserwacji odstających , wszystkie pozostałe zmienne mają.  
+
+## Macierz korelacji
+```{r Macierz korelacji 1}
+heatmaply_cor(cor(najem[,-1],method = 'pearson'),draw_cellnote=TRUE,   cellnote_textposition = "middle center" , cellnote_size = 8
+)
+```
+  
+Najsilniej sa współzależne zmiene rooms,squreMeters i price od 0,67 do aż 0,87.  
+Również zależne są floor i floor Count 0,67.  
+Wszystkie zmiene opisujace dystans sa w jakis sposob zależne, najbardziej zależny jest CenterDistance i CollegDistance0,56 ale z CollegeDistance też zależne są następujące zmiene schoolDistance 0,422 i ClinicDistance 0,42. Występuje też zależnośc miedzy postOfficeDistance, a PharmacyDistanc 0,45 CO CIEKAWE występuje ujemna wartość dla zmienych związanych z dystansem(z wyłączeniem KidenrgartenDistance) a z zmienną poiCount sięgając od -0,32 do -0,46  
+```{r Macierz korelacji 2}
+heatmaply_cor(cor(najem[,-1],method = 'kendall'),draw_cellnote=TRUE,   cellnote_textposition = "middle center" , cellnote_size = 8)
+heatmaply_cor(cor(najem[,-1],method = 'spearman'),draw_cellnote=TRUE,   cellnote_textposition = "middle center" , cellnote_size = 8)
+
+```
+  
+Motedą Kendalla i Spearmana otrzymujemy bardzo podbne wyniki,różnica jest taka, że metoda Kendalla wyniki są nieznacznie bliżej zera.  
+
+
+## PCA
+Robimy PCA, Zredukujemy wymiary do 2 i 3 , przeprowadzimy pca na zmienych orginalnych oraz wystandaryzowanych(wyscalowanych)  
+```{r PCA 1}
+pca.najem<-prcomp(najem[,-1])
+summary(pca.najem)
+df.pca<-data.frame(pc1=pca.najem$x[,1], pc2=pca.najem$x[,2],pc3=pca.najem$x[,3],kl=as.factor(najem$type))
+plot(x=df.pca[,1],y=df.pca[,2], col=as.factor(najem[,1]))
+plot_ly(df.pca,x=~pc1,y=~pc2,z=~pc3,color=~kl,type='scatter3d')
+pca.najem$rotation[,c(1,2,3)]
+```
+widzimy że PC1 jest zbudowany najbardziej ze zmiennej schoolDistance. Pierwszy wymiar wyjaśnia aż 0.9997 warianicji.  
+Na wykresie nie jestem w stanie rozróżnic type/klas. Ale tutaj robimy redukcje wymiaru nie klasyfikacje
+Zrobie jeszcze PCA ze standaryzacja:
+```{r PCA 2}
+pca.najem<-prcomp(najem[,-1],scale=T)
+summary(pca.najem)
+df.pca<-data.frame(pc1=pca.najem$x[,1], pc2=pca.najem$x[,2],pc3=pca.najem$x[,3],kl=as.factor(najem$type))
+plot(x=df.pca[,1],y=df.pca[,2], col=as.factor(najem[,1]))
+plot_ly(df.pca,x=~pc1,y=~pc2,z=~pc3,color=~kl,type='scatter3d')
+pca.najem$rotation[,c(1,2,3)]
+```
+Po dokonaniu standaryzacji wykres jest jeszcze bardziej nieczytelny. Trzy wymiary wyjaśniają nam tylko 0.5379 warianiacji, Nie pomogło nam to.
+  
+## TSNE
+```{r TSNe}
+
+## usuwanie duplikatów
+anyDuplicated(najem)
+najem.u<-unique(najem)
+anyDuplicated(najem.u)
+najem.u.tsne <- Rtsne(najem.u[,-1], theta=0, dims = 3)## około 20 minut
+najem.u.tsne.dwa <- Rtsne(najem.u[,-1], theta=0.5, dims = 3, perplexity = 100 )## około 2 minut
+summary(najem.u.tsne$Y)
+summary(najem.u.tsne.dwa$Y)
+sd(najem.u.tsne$Y)
+
+
+najem.u.tsne.df <- as.data.frame(najem.u.tsne$Y)
+najem.u.tsne.df2 <- as.data.frame(najem.u.tsne.dwa$Y)
+
+plot_ly(najem.u.tsne.df, x = ~V1, y = ~V2, z = ~V3,color = najem.u$type, type = 'scatter3d')
+plot_ly(najem.u.tsne.df2, x = ~V1, y = ~V2, z = ~V3,color = najem.u$type, type = 'scatter3d')
+
+```
+Widzimy że zmiene zostały rozdzielone i wraz ze wzrostem perplexit(odległości) coraz bardziej się oddalają.
+
+## k-srednich
+```{r Analiza skupień za pomocą k-mean 1}
+kmeans(najem[,-1],centers = 3)->najem.km.3
+
+pca.najem<-prcomp(najem[,-1])
+df.pca<-data.frame(pc1=pca.najem$x[,1], pc2=pca.najem$x[,2],pc3=pca.najem$x[,3],kl=as.factor(najem.km.3$cluster))
+plot_ly(df.pca,x=~pc1,y=~pc2,z=~pc3,color=najem.km.3$cluster,type='scatter3d')
+
+kmeans(unique(najem[,-1]),centers = 3)->najem.km.3.u
+plot_ly(najem.u.tsne.df2, x = ~V1, y = ~V2, z = ~V3,color = najem.km.3.u$cluster, type = 'scatter3d')
+
+
+```
+wyglada ładnie no ale sprawdzmy jak działa klasteryzacja:
+```{r Analiza skupień za pomoćą k-mean 2}
+table(najem$type,najem.km.3$cluster)
+```
+nie najlepiej typ: aparmentBuilding został rozbity mocno na 1 i 2, 3 klaster. BlockOfFlats: głownie na klastrze 3 , tenement: też mocno rozbity miedzy klastrem 1,2 a 3
+no dobrze przetestujemy sobie metoda łokcia ile tych klastrów być powino:
+```{r Analiza metoda lokcia}
+wss<-rep(NA,9)
+for(i in 1:9) wss[i]<-kmeans(najem[,-1],centers=i+1)$tot.withinss
+plot(1:9,wss)
+```
+  
+widzimy że trzy to optymalna ilość,póżniej już wykres sie wypłaszcza  
+
+## Hierachiczne, podziałowe.
+```{r hierachiczne i dend}
+najem.hier<-agnes(dist(najem[,-1],method="minkowski",p=1),diss=T)
+plot(najem.hier)
+plot(diana(najem[,-1]))
+```
+
+## Analiza czynikowa
+```{r analiza czynikowa 1}
+# Kaiser, Meyer, Olkin 
+KMO(najem[,-1])
+cortest.bartlett(unique(najem[,-1]),n=4000,diag=T)
+class(najem)
+```
+Możemy robić analize czynikową bo wszystkie wartości z KMO są wieksze niż 0.5, nawet jedna wartości jest "marvelous"  
+a test przeciwny tzn. barletta wyszedł negatywnie.  
+cytat z dokumentacji KMO  
+"In his delightfully flamboyant style, Kaiser (1975) suggested that KMO > .9 were marvelous, in the .80s, mertitourious, in the .70s, middling, in the .60s, medicore, in the 50s, miserable, and less than .5, unacceptable."  
+Kontynujemy  
+```{r analiza czynikowa 2}
+eigen.najem<-eigen(cor(najem[,-1]))
+eigen.najem$values
+łokietek<-nScree(x=eigen.najem$values)
+plot(łokietek)
+```
+  
+wybieramy 4 czyniki ponieważ nastepne nie wyjaśniają więcej niż jedna zmiena.  
+to się nazywa (prawdopodbnie) Kryterium Kaisera  
+dalej  
+```{r analiza czynikówa 3}
+EFA.najem.vm<-factanal(najem[,-1], factors = 4, rotation = "varimax")
+EFA.najem.pm<-factanal(unique(najem[,-1]), factors = 4, rotation = "promax")
+
+print(EFA.najem.pm, sort=T)
+print(EFA.najem.vm, sort=T)
+```
+  
+obrót metodą varmiax i promax dał podobne rezultaty.  
+Niebezpieczne wartości uniqunesses mają zmienne :kindergartenDistance   ,Year since build  
+Ładunki :widzimy że czynik pierwszy jest zbudowany głównie z squareMeters ,rooms,price ,Drugi czynik jest dosyć ciekawy,ponieważ działa z zmienymi dotyczącymi dystansów, wieku budowli.(Być może ma to związek z jakims stylem budowania osiedli)  
+ss loadings czyli suma kwadratów wszedzie wyszła powyżej 1 więc bardzo dobrze. p-value sugeruje nam żeby zrobić więcej czyników ,ale dla k=7 p-value=1.64e-06 ,więc zostaniemy przy 4.  
+  
+## Drzewo decyzji  
+```{r dzewo decyzji}
+
+summary(as.factor(najem$type))
+drzewo.najem<-rpart(as.factor(najem$type)~.,method = "class",data=najem[,-1])
+fancyRpartPlot(drzewo.najem)
+table(predict(drzewo.najem, najem, type="class"), najem$type)
+mean(predict(drzewo.najem, najem, type="class")==najem$type)
+
+```
+Metoda drzewa decyzji uzyskujemy 78% dokładności klasyfikacji.  Najważniejsze pytanie dotyczy wieku budowli.  
+
+  
+## Las losowy
+```{r las losowy 1}
+rfcv(trainx = najem[,-1],trainy = as.factor(najem$type))->rf.najem
+rf.najem$error.cv
+```
+Wniosek: Blad walidacji krzyzowej jest najnizszy przy 8 cechach.  
+```{r las losowy 2}
+randomForest(najem[,-1],as.factor(najem$type),importance=T)->rf.najem.imp
+varImpPlot(rf.najem.imp)
+```
+  
+8 najlepszych cech,to 'year since build',price,floorCount,centreDistance,poiCount,clinicDistance,restaurantDistance,squareMeters,  
+
+```{r las losowy 3}
+randomForest(najem[,c(6,16,5,7,8,10,13,2)],as.factor(najem$type))->rf.najem.sel
+rf.najem.sel$confusion
+1-mean(rf.najem.sel$confusion[,4])
+
+```
+  
+metodą lasów loswych uzyskujemy średnią dokładność na poziomie 83%, lepiej niż drzewem decyzji. Największy błąd mamy w klasie blockOfFlats i wynosi on 32%  
+  
+## KNN i Naiwny klasyfikator bayesowski  
+
+Teraz będziemy robić KNN i Bayes ale najpierw musze przygotować dane tzn. podzielić je na dwie grupy testowe i treningowe, wyskalować je (w KNN jak licze odległośc to dość ważne),usune dupliakty.  
+dziele zbiór na dwa nowe zbiory treningowe i testowe , ale tak aby podział klas pozstał bez zmian  
+```{r przygotowanie}
+podział<-createDataPartition(y=najem$type,times=1,p=0.5,list=F)
+najem.trening<-unique(najem[podział,])
+najem.test<-unique(najem[-podział,])
+anyDuplicated(najem.test)
+prop.table(table(najem$type))
+prop.table(table(najem.trening$type))
+```
+
+Podział został dokonany teraz Skalowanie/standaryzacja  
+```{r przygotowanie2}
+matryca<-preProcess(najem.trening[,-1],method=c("center","scale"))
+matryca
+#nic nie zostało zignorowane wszystko zostało wycentrowane i scalowane.
+najem.trening.sc<-predict(matryca,najem.trening)
+najem.test.sc<-predict(matryca,najem.test)
+apply(najem.trening.sc[,-1],2,sd)
+summary(najem.trening.sc)[4,]
+#tak jak chiceliśmy średnia -0 a sd =1.
+```
+Mamy przygotowne dane testowe i trenignowe  
+  
+##KNN
+```{r KNN}
+set.seed(332)#żeby miec te same wyniki 
+najem.knn<-knn(najem.trening.sc[,-1],najem.test.sc[,-1],najem.trening.sc$type, k=sqrt(length(najem.test.sc$type)))
+table(najem.knn,najem.test.sc$type)
+mean(najem.knn==najem.test.sc$type)
+```
+  
+kolumny to wartości prawdziwe, a wiersze to przewidziane.  
+No wiec za wyjątkiem Blockofflats to sobie dobrze poradził ,średnia dokładnośc dla k równego pierwiastkowi z obserwacji = 75%, Jak uczyłem się robienia knn na danych z wina to robiłem w tym miejscu pętle for i znajdowałem najlepsze k, teraz mam za dużo obserwacji .  
+
+## Naiwny klasyfikator bayesowski 
+```{r Naiwny klasyfiaktor bayesa}
+najem.nb<-naiveBayes(najem.trening$type ~.,data=najem.trening[,-1])
+najem.nb.pre<-predict(najem.nb,newdata=najem.test[,-1])
+najem.nb
+table(najem.nb.pre,najem.test$type)
+mean(najem.nb.pre==najem.test$type)
+```
+Tą metodą klasyfikacji otrzymujemy dokładność na poziomie około 75%, najlepiej jest klasyfikowana klasa tenement , reszta zauważalnie gorzej.  
+  
+## GMM
+```{r GMM}
+najem.gmm.DA<-MclustDA(najem[,-1],najem$type)
+summary(najem.gmm.DA)
+plot(najem.gmm.DA, dimens =15,what="classification")
+1-0.2228 
+
+```
+  
+Klasyfikacja GMM poszła dobrze dokładność mamy w okolicach 77% najlepiej poklasyfikowana klasa to tenement, gorzej sobie poradzil z innymi.  
+
+## Wnioski:
+Zbiór nie ma rozkładów normalnych. Parę zmienych jest wielomodalnych. Przeważająca większość zmiennych ma obserwacje odstające. PCA redukuje nam wymiary do 3 z 15 i to działa PCA jest w tym wypadku dla mnie bardziej zrozumiałe niż TSNE. Odpowiednia ilośc klastrów dla nas to 3.Mamy również 4 czyniki, nie znamy ich. Najlepsza metoda klasyfikacji to lasy losowe dają nam one ponad 83% skuteczności. Zawsze najlepiej oddawana była klasa tenement. Wszystkie klasyfikacje dawały nam wyniki na poziomie 75-79%. 
